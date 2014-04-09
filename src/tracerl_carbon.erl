@@ -47,28 +47,35 @@ init([Host, UDPPort | Opts]) ->
                      carbon_port = UDPPort,
                      udp_socket = Socket,
                      flush_freq = proplists:get_value(flush_freq, Opts,
-                                                      ?CARBON_FLUSH_FREQ)}};
+                                                      ?CARBON_FLUSH_FREQ),
+                     flush_time = proplists:get_value(flush_time, Opts,
+                                                      ?CARBON_FLUSH_TIME)}};
         {error, Reason} ->
             {stop, Reason}
     end.
 
-handle_call(Request, From, State) ->
+handle_call(Request, From, #?state{} = S) ->
     ?INFO("unexpected call from ~p: ~p~n", [From, Request]),
     Reply = ok,
-    {reply, Reply, State}.
+    {reply, Reply, S, timeout(s)}.
 
 handle_cast(#carbon_sample{} = Sample, #?state{} = S) ->
     case handle_cast_sample(Sample, S) of
-        {ok, NewS} -> {noreply, NewS};
+        {ok, NewS} -> {noreply, NewS, timeout(S)};
         {error, _} = ER -> {stop, ER, S}
     end;
-handle_cast(Msg, State) ->
+handle_cast(Msg, #?state{} = S) ->
     ?INFO("unexpected cast: ~p~n", [Msg]),
-    {noreply, State}.
+    {noreply, S, timeout(S)}.
 
-handle_info(Info, State) ->
+handle_info(timeout, #?state{} = S) ->
+    case send_batch(S) of
+        {ok, NewS} -> {noreply, NewS, timeout(S)};
+        {error, _} = ER -> {stop, ER, S}
+    end;
+handle_info(Info, #?state{} = S) ->
     ?INFO("unexpected info: ~p~n", [Info]),
-    {noreply, State}.
+    {noreply, S, timeout(S)}.
 
 terminate(_Reason, _State) ->
     ok.
@@ -80,26 +87,44 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %%
 
-handle_cast_sample(#carbon_sample{} = Sample,
-                   #?state{carbon_host = Addr,
-                           carbon_port = Port,
-                           udp_socket = Socket,
-                           flush_freq = FlushFreq,
-                           samples = Samples,
-                           nsamples = NSamples} = S)
-  when NSamples + 1 == FlushFreq ->
+-spec handle_cast_sample(carbon_sample(),
+                         tracerl_carbon_state()) -> {ok, tracerl_carbon_state()}
+                                                    | {error, any()}.
+handle_cast_sample(#carbon_sample{} = Sample, #?state{} = S) ->
+    BufferedS = buffer_sample(Sample, S),
+    maybe_send_batch(BufferedS).
+
+-spec buffer_sample(carbon_sample(),
+                    tracerl_carbon_state()) -> tracerl_carbon_state().
+buffer_sample(#carbon_sample{} = Sample,
+              #?state{samples = Samples,
+                      nsamples = NSamples} = S) ->
+    S#?state{samples = [Sample | Samples],
+             nsamples = NSamples + 1}.
+
+-spec maybe_send_batch(tracerl_carbon_state()) -> {ok, tracerl_carbon_state()} |
+                                                  {error, any()}.
+maybe_send_batch(#?state{flush_freq = FlushFreq,
+                         nsamples = NSamples} = S) ->
+    if
+        NSamples == FlushFreq -> send_batch(S);
+        NSamples /= FlushFreq -> {ok, S}
+    end.
+
+-spec send_batch(tracerl_carbon_state()) -> {ok, tracerl_carbon_state()} |
+                                            {error, any()}.
+send_batch(#?state{nsamples = 0} = S) ->
+    {ok, S};
+send_batch(#?state{carbon_host = Addr, carbon_port = Port,
+                   udp_socket = Socket, samples = Samples} = S) ->
     case gen_udp:send(Socket, Addr, Port,
-                      samples_to_iodata([Sample | Samples])) of
-        {error, _} = Error -> Error;
+                      samples_to_iodata(Samples)) of
+        {error, _} = Error ->
+            Error;
         ok ->
             {ok, S#?state{samples = [],
                           nsamples = 0}}
-    end;
-handle_cast_sample(#carbon_sample{} = Sample,
-                   #?state{samples = Samples,
-                           nsamples = NSamples} = S) ->
-    {ok, S#?state{samples = [Sample | Samples],
-                  nsamples = NSamples + 1}}.
+    end.
 
 samples_to_iodata(Samples) ->
     [[sample_to_iodata(Sample), $\n] || Sample <- Samples].
@@ -112,3 +137,6 @@ sample_to_iodata(#carbon_sample{metric = Metric, value = Value,
 
 timestamp_to_seconds({Mega, Seconds, _}) ->
     1000 * 1000 * Mega + Seconds.
+
+timeout(#?state{flush_time = Time}) ->
+    timer:seconds(Time).
