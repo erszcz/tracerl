@@ -56,6 +56,7 @@ send_to_carbon_test(_) ->
     startup([{flush_freq, 1}]),
     ?a(is_running()),
     tracerl_carbon:send_to_carbon(sample("foo.bar.baz", 124, os:timestamp())),
+    receive {meck_fake_udp_send, _} -> ok end,
     ?ae(1, meck:num_calls(gen_udp, send, '_')).
 
 %% The data should be flushed to the socket once per big enough batch,
