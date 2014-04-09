@@ -86,7 +86,7 @@ flush_incomplete_batch_test() ->
 flush_incomplete_batch_test(_) ->
     startup([{flush_freq, 5}, {flush_time, 1}]),
     ?a(is_running()),
-    tracerl_carbon:send_to_carbon(sample("foo.bar.baz", 124, os:timestamp())),
+    send_to_carbon("foo.bar.baz", 124, os:timestamp()),
     receive {meck_fake_udp_send, _} -> ok end,
     ?ae(1, meck:num_calls(gen_udp, send, '_')).
 
