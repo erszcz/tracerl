@@ -108,8 +108,7 @@ sample_to_iodata(#carbon_sample{metric = Metric, value = Value,
                                 timestamp = TS}) ->
     BValue = integer_to_binary(Value),
     BTS = integer_to_binary(timestamp_to_seconds(TS)),
-    %[Metric, $\ , BValue, $\ , BTS].
-    iolist_to_binary([Metric, $\ , BValue, $\ , BTS]).
+    [Metric, $\ , BValue, $\ , BTS].
 
 timestamp_to_seconds({Mega, Seconds, _}) ->
     1000 * 1000 * Mega + Seconds.
