@@ -18,11 +18,13 @@ groups() ->
 tests() ->
     [startup_test,
      send_to_carbon_test,
-     send_batch_to_carbon_test].
+     send_batch_to_carbon_test,
+     flush_incomplete_batch_test].
 
 init_per_testcase(CaseName, Config)
   when CaseName =:= send_to_carbon_test;
-       CaseName =:= send_batch_to_carbon_test ->
+       CaseName =:= send_batch_to_carbon_test;
+       CaseName =:= flush_incomplete_batch_test ->
     meck:new(gen_udp, [unstick]),
     meck:expect(gen_udp, open, fun (_, _) -> {ok, meck_fake_socket} end),
     Self = self(),
@@ -36,7 +38,8 @@ init_per_testcase(_CaseName, Config) ->
 
 end_per_testcase(CaseName, _Config)
   when CaseName =:= send_to_carbon_test;
-       CaseName =:= send_batch_to_carbon_test ->
+       CaseName =:= send_batch_to_carbon_test;
+       CaseName =:= flush_incomplete_batch_test ->
     meck:unload(gen_udp),
     ok;
 end_per_testcase(_CaseName, _Config) ->
@@ -74,6 +77,18 @@ send_batch_to_carbon_test(_) ->
      || I <- lists:seq(8, 10)],
     receive {meck_fake_udp_send, _} -> ok end,
     ?ae(2, meck:num_calls(gen_udp, send, '_')).
+
+flush_incomplete_batch_test() ->
+    [{timetrap, {seconds, 10}}].
+
+%% If no samples are published for a period of time,
+%% the server will flush whatever it's got in the buffer.
+flush_incomplete_batch_test(_) ->
+    startup([{flush_freq, 5}, {flush_time, 1}]),
+    ?a(is_running()),
+    tracerl_carbon:send_to_carbon(sample("foo.bar.baz", 124, os:timestamp())),
+    receive {meck_fake_udp_send, _} -> ok end,
+    ?ae(1, meck:num_calls(gen_udp, send, '_')).
 
 %%
 %% Helpers
